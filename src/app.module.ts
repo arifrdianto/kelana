@@ -8,6 +8,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { databaseConfig } from '@/config/database.config';
 import { pinoConfig } from '@/config/logger.config';
 import { throttlerConfig } from '@/config/throttler.config';
+import { CacheModule } from '@/shared/services/cache/cache.module';
 
 @Module({
   imports: [
@@ -18,6 +19,9 @@ import { throttlerConfig } from '@/config/throttler.config';
 
     // Database
     TypeOrmModule.forRootAsync(databaseConfig),
+
+    // Cache
+    CacheModule,
 
     // Logger
     LoggerModule.forRoot(pinoConfig),
