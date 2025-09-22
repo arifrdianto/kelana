@@ -19,8 +19,8 @@ import { KmsModule } from './modules/kms/kms.module';
       isGlobal: true,
     }),
 
-    // Database (conditional - only if DATABASE_HOST is available)
-    ...(process.env.DATABASE_HOST ? [TypeOrmModule.forRootAsync(databaseConfig)] : []),
+    // Database
+    TypeOrmModule.forRootAsync(databaseConfig),
 
     // Cache
     CacheModule,
