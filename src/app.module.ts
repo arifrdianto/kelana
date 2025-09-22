@@ -31,8 +31,8 @@ import { KmsModule } from './modules/kms/kms.module';
     // Throttling
     ThrottlerModule.forRootAsync(throttlerConfig),
 
-    // KMS Module (conditional - only if database is available)
-    ...(process.env.DATABASE_HOST ? [KmsModule] : []),
+    // KMS Module
+    KmsModule,
   ],
   controllers: [],
   providers: [],
