@@ -35,8 +35,6 @@ import Keyv from 'keyv';
           console.error('Keyv store error:', err);
         });
 
-        console.log('Cache module initializing with Redis URL:', redisUrl);
-
         return new Cacheable({
           secondary: store,
           ttl,

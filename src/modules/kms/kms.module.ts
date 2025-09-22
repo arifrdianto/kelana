@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { KmsController } from './controllers/kms.controller';
 import { CryptographicKey } from './entities/cryptographic-key.entity';
 import { KeyRotationLog } from './entities/key-rotation-log.entity';
 import { CryptographicKeyRepository } from './repositories/cryptographic-key.repository';
@@ -13,7 +14,7 @@ import { JwksService } from './services/jwks.service';
 import { KeyGenerationService } from './services/key-generation.service';
 import { KeyRotationService } from './services/key-rotation.service';
 import { KeyStorageService } from './services/key-storage.service';
-import { KmsController } from './kms.controller';
+import { KeyValidationService } from './services/key-validation.service';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { KmsController } from './kms.controller';
     JwksService,
     CryptographicKeyRepository,
     KeyRotationLogRepository,
+    KeyValidationService,
   ],
   exports: [
     CryptographicService,

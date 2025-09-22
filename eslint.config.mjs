@@ -42,6 +42,9 @@ export default defineConfig([
         'error',
         {
           groups: [
+            // 0. OpenTelemetry instrumentation must always be first
+            ['^\\.\\/instrumentation$'],
+
             // 1. Node.js builtins
             [
               '^(assert|buffer|child_process|cluster|console|constants|crypto|dgram|dns|domain|events|express|fs|http|https|module|net|os|path|punycode|querystring|readline|repl|stream|string_decoder|sys|timers|tls|tty|url|util|vm|zlib|freelist|v8|process)(/.*|$)',

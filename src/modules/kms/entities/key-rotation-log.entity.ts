@@ -11,7 +11,7 @@ export class KeyRotationLog extends BaseEntity {
   newKid: string | null;
 
   @Column({ name: 'rotation_type', type: 'varchar', length: 50 })
-  rotationType: 'scheduled' | 'emergency' | 'manual';
+  rotationType: 'initial' | 'scheduled' | 'emergency' | 'manual';
 
   @Column({ name: 'rotation_reason', type: 'text', nullable: true })
   rotationReason: string | null;
