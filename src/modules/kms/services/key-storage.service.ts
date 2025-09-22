@@ -19,6 +19,7 @@ export class KeyStorageService implements OnModuleInit {
   private readonly logger = new Logger(KeyStorageService.name);
   private readonly ENCRYPTION_ALGORITHM = 'aes-256-ctr';
   private encryptionKey: Buffer;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -31,37 +32,63 @@ export class KeyStorageService implements OnModuleInit {
 
   async onModuleInit() {
     await this.initializeEncryption();
-    await this.ensureActiveKey();
+    // Use singleton pattern to prevent race condition on concurrent initialization
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.ensureActiveKey();
+    }
+    await this.initializationPromise;
   }
 
   /**
    * Ensure at least one active key exists in DB
+   * Uses database-level atomic operations to prevent race conditions
    */
   private async ensureActiveKey(): Promise<void> {
     try {
-      // Check if there is a current active key
-      const currentKey = await this.getCurrentKey();
+      // Use a database transaction to ensure atomicity and prevent race conditions
+      await this.keyRepository.manager.transaction(async (transactionalEntityManager) => {
+        // Double-check within transaction to handle race conditions
+        const currentKey = await transactionalEntityManager
+          .createQueryBuilder(CryptographicKey, 'key')
+          .where('key.is_active = :isActive AND key.expires_at > :now', {
+            isActive: true,
+            now: new Date(),
+          })
+          .setLock('pessimistic_write') // Lock to prevent concurrent modifications
+          .getOne();
 
-      if (!currentKey) {
-        this.logger.log('No active keys found. Generating initial key...');
+        if (!currentKey) {
+          this.logger.log('No active keys found. Generating initial key...');
 
-        // Generate and store a new key
-        const keyPair = await this.keyGenerationService.generateKeyPair();
-        await this.storeKey(keyPair);
+          // Generate and store a new key within the transaction
+          const keyPair = await this.keyGenerationService.generateKeyPair();
+          
+          const encryptedPrivateKey = this.encrypt(keyPair.privateKey);
+          const key = transactionalEntityManager.create(CryptographicKey, {
+            kid: keyPair.kid,
+            publicKey: keyPair.publicKey,
+            privateKey: encryptedPrivateKey,
+            algorithm: keyPair.algorithm,
+            expiresAt: keyPair.expiresAt,
+            isActive: true,
+          });
 
-        // Log initial key creation
-        await this.logKeyRotation({
-          oldKid: null,
-          newKid: keyPair.kid,
-          rotationType: 'initial',
-          reason: 'Initial key generation on startup',
-          rotatedBy: 'system-init',
-        });
+          await transactionalEntityManager.save(key);
 
-        this.logger.log(`Initial key generated with kid: ${keyPair.kid}`);
-      } else {
-        this.logger.log(`Found existing active key: ${currentKey.kid}`);
-      }
+          // Log initial key creation
+          await this.logKeyRotation({
+            oldKid: null,
+            newKid: keyPair.kid,
+            rotationType: 'initial',
+            reason: 'Initial key generation on startup',
+            rotatedBy: 'system-init',
+          });
+
+          this.logger.log(`Initial key generated with kid: ${keyPair.kid}`);
+        } else {
+          this.logger.log(`Found existing active key: ${currentKey.kid}`);
+        }
+      });
     } catch (error) {
       this.logger.error(
         'Failed to ensure active key during initialization',
