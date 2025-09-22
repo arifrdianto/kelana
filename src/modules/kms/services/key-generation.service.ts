@@ -11,7 +11,7 @@ export interface KeyPair {
   privateKey: string;
   publicKey: string;
   kid: string;
-  algorithm: 'RS256';
+  algorithm: string;
   createdAt: Date;
   expiresAt: Date;
 }
@@ -19,27 +19,29 @@ export interface KeyPair {
 @Injectable()
 export class KeyGenerationService {
   private readonly logger = new Logger(KeyGenerationService.name);
-  private readonly KEY_SIZE = 2048; // RSA key size in bits (2048 is standard, 4096 is overkill for most use cases)
   private readonly KEY_ALGORITHM = 'rsa'; // Use 'rsa' instead of 'RSA-PSS' for better compatibility
-  private readonly KEY_EXPIRY_DAYS = 30;
 
   constructor(private readonly configService: ConfigService) {}
 
   /**
-   * Generate a new RSA key pair
+   * Generate a new RSA key pair with configurable options
    * @returns Promise<KeyPair>
    */
   async generateKeyPair(): Promise<KeyPair> {
     try {
       const now = new Date();
       const expiresAt = new Date(now);
-      expiresAt.setDate(now.getDate() + this.KEY_EXPIRY_DAYS);
+
+      const keySize = this.getKeySize();
+      const expiryDays = this.getKeyExpiryDays();
+
+      expiresAt.setDate(now.getDate() + expiryDays);
 
       const passphrase = this.configService.get<string>('KMS_KEY_PASSPHRASE');
 
       // Generate key pair with conditional encryption
       const keyPairOptions: RSAKeyPairOptions<'pem', 'pem'> = {
-        modulusLength: this.KEY_SIZE,
+        modulusLength: keySize,
         publicKeyEncoding: {
           type: 'spki',
           format: 'pem',
@@ -63,6 +65,10 @@ export class KeyGenerationService {
 
       const kid = this.generateKeyId();
 
+      this.logger.log(
+        `Generated new ${keySize}-bit RSA key pair with kid: ${kid}, expires: ${expiresAt.toISOString()}`,
+      );
+
       return {
         privateKey: privateKey,
         publicKey: publicKey,
@@ -78,12 +84,12 @@ export class KeyGenerationService {
   }
 
   /**
-   * Generate a unique key ID using crypto-secure random bytes
+   * Generate a unique key ID using crypto-secure random bytes with timestamp
    * @returns string
    */
   private generateKeyId(): string {
     const timestamp = Date.now().toString(36);
-    const randomPart = randomBytes(6).toString('hex');
+    const randomPart = randomBytes(8).toString('hex'); // Increased randomness
     return `kid_${timestamp}_${randomPart}`;
   }
 
@@ -95,13 +101,17 @@ export class KeyGenerationService {
     try {
       const now = new Date();
       const expiresAt = new Date(now);
-      expiresAt.setDate(now.getDate() + this.KEY_EXPIRY_DAYS);
+
+      const keySize = this.getKeySize();
+      const expiryDays = this.getKeyExpiryDays();
+
+      expiresAt.setDate(now.getDate() + expiryDays);
 
       const passphrase = this.configService.get<string>('KMS_KEY_PASSPHRASE');
 
       // Generate key pair with conditional encryption
       const keyPairOptions: RSAKeyPairOptions<'pem', 'pem'> = {
-        modulusLength: this.KEY_SIZE,
+        modulusLength: keySize,
         publicKeyEncoding: {
           type: 'spki',
           format: 'pem',
@@ -155,5 +165,98 @@ export class KeyGenerationService {
     const now = new Date();
     const diffTime = keyPair.expiresAt.getTime() - now.getTime();
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  }
+
+  /**
+   * Get configured key size with validation
+   */
+  private getKeySize(): number {
+    const keySize = parseInt(this.configService.get<string>('KMS_KEY_SIZE', '2048'), 10);
+
+    // Validate key size (must be at least 2048 for security)
+    if (keySize < 2048) {
+      this.logger.warn(
+        `Key size ${keySize} is below minimum recommended size of 2048. Using 2048.`,
+      );
+      return 2048;
+    }
+
+    // Common valid RSA key sizes
+    const validSizes = [2048, 3072, 4096];
+    if (!validSizes.includes(keySize)) {
+      this.logger.warn(`Unusual key size ${keySize}. Recommended sizes: ${validSizes.join(', ')}`);
+    }
+
+    return keySize;
+  }
+
+  /**
+   * Get configured key expiry days with validation
+   */
+  private getKeyExpiryDays(): number {
+    const expiryDays = parseInt(this.configService.get<string>('KMS_KEY_EXPIRY_DAYS', '30'), 10);
+
+    // Validate expiry days (minimum 7 days, maximum 365 days)
+    if (expiryDays < 7) {
+      this.logger.warn(`Key expiry ${expiryDays} days is too short. Using minimum of 7 days.`);
+      return 7;
+    }
+
+    if (expiryDays > 365) {
+      this.logger.warn(
+        `Key expiry ${expiryDays} days is very long. Consider shorter rotation periods for better security.`,
+      );
+    }
+
+    return expiryDays;
+  }
+
+  /**
+   * Validate key pair format and structure
+   * @param keyPair KeyPair to validate
+   * @returns boolean indicating if the key pair is structurally valid
+   */
+  validateKeyPair(keyPair: KeyPair): boolean {
+    try {
+      // Check required fields
+      if (!keyPair.kid || !keyPair.publicKey || !keyPair.privateKey) {
+        this.logger.error('Key pair missing required fields');
+        return false;
+      }
+
+      // Validate PEM format
+      if (
+        !keyPair.publicKey.includes('-----BEGIN PUBLIC KEY-----') ||
+        !keyPair.publicKey.includes('-----END PUBLIC KEY-----')
+      ) {
+        this.logger.error('Invalid public key PEM format');
+        return false;
+      }
+
+      if (
+        !keyPair.privateKey.includes('-----BEGIN PRIVATE KEY-----') &&
+        !keyPair.privateKey.includes('-----BEGIN ENCRYPTED PRIVATE KEY-----')
+      ) {
+        this.logger.error('Invalid private key PEM format');
+        return false;
+      }
+
+      // Validate algorithm
+      if (keyPair.algorithm !== 'RS256') {
+        this.logger.error(`Unsupported algorithm: ${keyPair.algorithm}`);
+        return false;
+      }
+
+      // Validate dates
+      if (keyPair.expiresAt <= keyPair.createdAt) {
+        this.logger.error('Key expiry date must be after creation date');
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      this.logger.error('Error validating key pair', error);
+      return false;
+    }
   }
 }

@@ -193,44 +193,6 @@ export class KmsController {
     }
   }
 
-  @Post('emergency-rotate')
-  @HttpCode(204)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Emergency key rotation',
-    description:
-      'Performs emergency key rotation with immediate deactivation of old keys. Use only in security incidents.',
-  })
-  @ApiResponse({
-    status: 204,
-    description: 'Emergency key rotation completed successfully',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - Authentication required',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'Forbidden - Admin access required',
-  })
-  @ApiResponse({
-    status: 500,
-    description: 'Internal server error - Emergency rotation failed',
-  })
-  async emergencyRotate(): Promise<void> {
-    try {
-      this.logger.warn('Emergency key rotation requested');
-      await this.keyRotationService.emergencyRotateKeys(
-        'Emergency rotation via API endpoint',
-        'api-admin',
-      );
-      this.logger.warn('Emergency key rotation completed successfully');
-    } catch (error) {
-      this.logger.error('Emergency key rotation failed', error);
-      throw error;
-    }
-  }
-
   @Get('stats')
   @ApiOperation({
     summary: 'Get KMS statistics',

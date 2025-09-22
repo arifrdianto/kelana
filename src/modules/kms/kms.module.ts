@@ -14,7 +14,6 @@ import { JwksService } from './services/jwks.service';
 import { KeyGenerationService } from './services/key-generation.service';
 import { KeyRotationService } from './services/key-rotation.service';
 import { KeyStorageService } from './services/key-storage.service';
-import { KeyValidationService } from './services/key-validation.service';
 
 @Module({
   imports: [
@@ -28,7 +27,6 @@ import { KeyValidationService } from './services/key-validation.service';
     KeyGenerationService,
     KeyRotationService,
     KeyStorageService,
-    KeyValidationService,
     CryptographicService,
     JwksService,
     CryptographicKeyRepository,
@@ -37,7 +35,8 @@ import { KeyValidationService } from './services/key-validation.service';
   exports: [
     CryptographicService,
     JwksService,
-    KeyValidationService,
+    KeyStorageService,
+    KeyRotationService,
     CryptographicKeyRepository,
     KeyRotationLogRepository,
   ],

@@ -5,7 +5,6 @@ import { decode, JwtPayload, sign, SignOptions, verify, VerifyOptions } from 'js
 import { KeyNotFoundException } from '@/shared/exceptions/jwk.exception';
 
 import { KeyStorageService } from './key-storage.service';
-import { KeyValidationService } from './key-validation.service';
 
 export interface JwtSignOptions extends Omit<SignOptions, 'algorithm' | 'keyid'> {
   expiresIn?: SignOptions['expiresIn'];
@@ -31,10 +30,7 @@ export class CryptographicService {
   private readonly DEFAULT_EXPIRES_IN = '1h';
   private readonly SUPPORTED_ALGORITHMS = ['RS256', 'RS384', 'RS512'];
 
-  constructor(
-    private readonly keyStorageService: KeyStorageService,
-    private readonly keyValidationService: KeyValidationService,
-  ) {}
+  constructor(private readonly keyStorageService: KeyStorageService) {}
 
   /**
    * Sign a JWT payload with the current active key or specified key

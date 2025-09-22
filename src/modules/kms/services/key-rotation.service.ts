@@ -29,30 +29,15 @@ export class KeyRotationService implements OnModuleInit {
    */
   private async ensureInitialKey(): Promise<void> {
     try {
-      // Check if there is already a current active key
-      const currentKey = await this.keyStorageService.getCurrentKey();
+      const keyCount = await this.keyStorageService.countActiveKeys();
 
-      if (!currentKey) {
+      if (keyCount === 0) {
         this.logger.log(
-          'No active key found during rotation service init. Generating initial key...',
+          'No active keys found during rotation service init. Generating initial key...',
         );
-
-        // Generate and store the first key
-        const newKey = await this.keyGenerationService.generateKeyPair();
-        await this.keyStorageService.storeKey(newKey);
-
-        // Log initial key rotation (oldKid is null)
-        await this.keyStorageService.logKeyRotation({
-          oldKid: null,
-          newKid: newKey.kid,
-          rotationType: 'initial',
-          reason: 'Initial key generation on startup',
-          rotatedBy: 'system',
-        });
-
-        this.logger.log(`Initial key generated with kid: ${newKey.kid}`);
+        await this.rotateKeys();
       } else {
-        this.logger.log(`Rotation service initialized with existing active key: ${currentKey.kid}`);
+        this.logger.log(`Rotation service initialized with ${keyCount} active key(s)`);
       }
     } catch (error) {
       this.logger.error(
@@ -172,46 +157,6 @@ export class KeyRotationService implements OnModuleInit {
       this.logger.error('Error during key rotation', this.getErrorStack(error));
       throw new Error(
         `Failed to rotate keys: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      );
-    }
-  }
-
-  /**
-   * Manually trigger key rotation (for emergency situations)
-   */
-  public async emergencyRotateKeys(reason: string, rotatedBy: string = 'admin'): Promise<KeyPair> {
-    try {
-      this.logger.warn(`Emergency key rotation triggered by ${rotatedBy}: ${reason}`);
-
-      // Generate a new key pair
-      const newKeyPair = await this.keyGenerationService.generateKeyPair();
-
-      // Get the current active key
-      const currentKey = await this.keyStorageService.getCurrentKey();
-
-      // Store the new key
-      await this.keyStorageService.storeKey(newKeyPair);
-
-      // Deactivate old key immediately (emergency rotation)
-      if (currentKey) {
-        await this.keyStorageService.deactivateKey(currentKey.kid, 'emergency_rotation');
-      }
-
-      // Log the emergency rotation
-      await this.keyStorageService.logKeyRotation({
-        oldKid: currentKey?.kid,
-        newKid: newKeyPair.kid,
-        rotationType: 'emergency',
-        reason,
-        rotatedBy,
-      });
-
-      this.logger.warn(`Emergency key rotation completed. New key ID: ${newKeyPair.kid}`);
-      return newKeyPair;
-    } catch (error) {
-      this.logger.error('Error during emergency key rotation', this.getErrorStack(error));
-      throw new Error(
-        `Failed to perform emergency key rotation: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
     }
   }

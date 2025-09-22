@@ -12,8 +12,6 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
   try {
-    logger.log('Starting application...');
-
     // Initialize the NestJS application
     const app = await NestFactory.create(AppModule, {
       bufferLogs: true,
@@ -113,9 +111,6 @@ async function bootstrap() {
 
     const port = process.env.PORT || 5000;
     await app.listen(port, '0.0.0.0');
-
-    logger.log(`Application is running on: http://localhost:${port}`);
-    logger.log(`Swagger documentation available at: http://localhost:${port}/docs`);
   } catch (error) {
     logger.error(`Failed to start application: ${error.message}`, error.stack);
     process.exit(1);

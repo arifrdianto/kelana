@@ -31,44 +31,6 @@ export class KeyStorageService implements OnModuleInit {
 
   async onModuleInit() {
     await this.initializeEncryption();
-    await this.ensureActiveKey();
-  }
-
-  /**
-   * Ensure at least one active key exists in DB
-   */
-  private async ensureActiveKey(): Promise<void> {
-    try {
-      // Check if there is a current active key
-      const currentKey = await this.getCurrentKey();
-
-      if (!currentKey) {
-        this.logger.log('No active keys found. Generating initial key...');
-
-        // Generate and store a new key
-        const keyPair = await this.keyGenerationService.generateKeyPair();
-        await this.storeKey(keyPair);
-
-        // Log initial key creation
-        await this.logKeyRotation({
-          oldKid: null,
-          newKid: keyPair.kid,
-          rotationType: 'initial',
-          reason: 'Initial key generation on startup',
-          rotatedBy: 'system-init',
-        });
-
-        this.logger.log(`Initial key generated with kid: ${keyPair.kid}`);
-      } else {
-        this.logger.log(`Found existing active key: ${currentKey.kid}`);
-      }
-    } catch (error) {
-      this.logger.error(
-        'Failed to ensure active key during initialization',
-        this.getErrorStack(error),
-      );
-      throw new Error('Critical: Failed to initialize KMS with active keys');
-    }
   }
 
   /**
@@ -110,7 +72,7 @@ export class KeyStorageService implements OnModuleInit {
   async logKeyRotation(options: {
     oldKid?: string | null;
     newKid: string;
-    rotationType: 'initial' | 'scheduled' | 'emergency' | 'manual';
+    rotationType: 'scheduled' | 'emergency' | 'manual';
     reason?: string;
     rotatedBy?: string;
   }): Promise<void> {
@@ -134,15 +96,12 @@ export class KeyStorageService implements OnModuleInit {
   private async initializeEncryption(): Promise<void> {
     try {
       const encryptionKey = this.configService.get<string>('KMS_ENCRYPTION_KEY');
-
       if (!encryptionKey) {
-        // ONLY for fresh DB/dev/testing; warns in prod
         this.logger.warn(
-          'No KMS_ENCRYPTION_KEY found in environment. Using in-memory key (NOT for production)',
+          'No KMS_ENCRYPTION_KEY found in environment. Using in-memory key (not recommended for production)',
         );
         this.encryptionKey = randomBytes(32);
       } else {
-        // Derive a 32-byte key from passphrase
         this.encryptionKey = (await scryptAsync(encryptionKey, 'salt', 32)) as Buffer;
       }
     } catch (error) {
@@ -164,10 +123,6 @@ export class KeyStorageService implements OnModuleInit {
   }
 
   private decrypt(encryptedData: string): string {
-    if (!this.encryptionKey) {
-      throw new Error('Encryption key not initialized');
-    }
-
     try {
       const [ivHex, encryptedText] = encryptedData.split(':');
       if (!ivHex || !encryptedText) {
