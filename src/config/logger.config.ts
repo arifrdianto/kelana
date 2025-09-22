@@ -13,7 +13,7 @@ const pinoConfig: Params = {
     quietReqLogger: true,
     genReqId: (req) => req.headers['x-request-id'] || req.id,
     level: isProduction ? 'info' : 'debug',
-    name: process.env.SERVICE_NAME || 'Klana',
+    name: process.env.SERVICE_NAME || 'Kelana',
     transport: isProduction
       ? undefined
       : {

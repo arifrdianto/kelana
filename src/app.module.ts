@@ -10,6 +10,8 @@ import { pinoConfig } from '@/config/logger.config';
 import { throttlerConfig } from '@/config/throttler.config';
 import { CacheModule } from '@/shared/services/cache/cache.module';
 
+import { KmsModule } from './modules/kms/kms.module';
+
 @Module({
   imports: [
     // Config
@@ -28,6 +30,9 @@ import { CacheModule } from '@/shared/services/cache/cache.module';
 
     // Throttling
     ThrottlerModule.forRootAsync(throttlerConfig),
+
+    // KMS Module
+    KmsModule,
   ],
   controllers: [],
   providers: [],

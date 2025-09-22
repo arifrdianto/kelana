@@ -9,12 +9,12 @@ export function setupSwagger(app: INestApplication): void {
   }
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
-  const serviceName = process.env.SERVICE_NAME ?? 'klana';
+  const serviceName = process.env.SERVICE_NAME ?? 'Kelana';
   const serviceHost = process.env.SERVICE_HOST ?? 'localhost';
 
   const config = new DocumentBuilder()
-    .setTitle('Klana API')
-    .setDescription('API documentation for Klana')
+    .setTitle('Kelana API')
+    .setDescription('API documentation for Kelana')
     .setVersion('1.0.0')
     .addBearerAuth({
       type: 'http',

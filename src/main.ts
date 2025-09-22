@@ -56,7 +56,7 @@ async function bootstrap() {
   await app.listen(port);
 }
 
-bootstrap().catch((error) => {
-  PinoLogger.root.error('Failed to start application:', error);
+bootstrap().catch((error: Error) => {
+  PinoLogger.root.error({ error }, `Failed to start application: ${error.message}`);
   process.exit(1);
 });
