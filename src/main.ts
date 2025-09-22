@@ -111,8 +111,8 @@ async function bootstrap() {
         });
     });
 
-    const port = process.env.PORT || 3000;
-    await app.listen(port);
+    const port = process.env.PORT || 5000;
+    await app.listen(port, '0.0.0.0');
 
     logger.log(`Application is running on: http://localhost:${port}`);
     logger.log(`Swagger documentation available at: http://localhost:${port}/docs`);
