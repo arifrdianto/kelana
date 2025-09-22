@@ -32,8 +32,11 @@ outputType = "webview"
 [[ports]]
 localPort = 5000
 externalPort = 80
+<<<<<<< HEAD
 
 [deployment]
 deploymentTarget = "vm"
 run = ["npm", "run", "start:prod"]
 build = ["npm", "run", "build"]
+=======
+>>>>>>> f53ed83 (Make database connection optional for application startup)
