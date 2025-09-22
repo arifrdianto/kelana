@@ -1,7 +1,8 @@
 import { Controller, Get, HttpCode, Logger, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
-import { JWKS, JwksService } from '../services/jwks.service';
+import { JWKS } from '../interfaces/jwk.interface';
+import { JwksService } from '../services/jwks.service';
 import { KeyRotationService } from '../services/key-rotation.service';
 import { KeyStorageService } from '../services/key-storage.service';
 
