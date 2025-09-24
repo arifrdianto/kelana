@@ -1,3 +1,4 @@
+// src/modules/kms/services/jwks.service.ts
 import { createHash, createPublicKey } from 'crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
@@ -12,47 +13,99 @@ interface CertificateData {
   thumbprintSha256: string;
 }
 
+interface JwksMetadata {
+  lastUpdated: Date;
+  keyCount: number;
+  nextKeyExpiry?: Date;
+}
+
 @Injectable()
 export class JwksService {
   private readonly logger = new Logger(JwksService.name);
+
+  // RFC 7517 compliant constants
+  private readonly SUPPORTED_KEY_TYPES = ['RSA', 'EC', 'oct'] as const;
+  private readonly SUPPORTED_ALGORITHMS = [
+    'RS256',
+    'RS384',
+    'RS512',
+    'ES256',
+    'ES384',
+    'ES512',
+    'PS256',
+    'PS384',
+    'PS512',
+  ] as const;
+  private readonly SUPPORTED_KEY_USES = ['sig', 'enc'] as const;
+  private readonly SUPPORTED_KEY_OPERATIONS: KeyOperation[] = [
+    'sign',
+    'verify',
+    'encrypt',
+    'decrypt',
+    'wrapKey',
+    'unwrapKey',
+    'deriveKey',
+    'deriveBits',
+  ];
+
+  // Current implementation defaults
   private readonly DEFAULT_ALGORITHM = 'RS256';
   private readonly KEY_TYPE = 'RSA';
-  private readonly KEY_OPERATIONS = ['verify'];
+  private readonly DEFAULT_KEY_OPERATIONS = ['verify'] as KeyOperation[];
+
+  // Base64url character sets for validation
+  private readonly BASE64_CHARS =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  private readonly BASE64URL_CHARS =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
   constructor(private readonly keyStorageService: KeyStorageService) {}
 
   /**
    * Get the JSON Web Key Set (JWKS) containing all active, non-expired public keys
+   * RFC 7517 compliant implementation
    */
   public async getJwks(): Promise<JWKS> {
     try {
-      // Get only active, non-expired keys
       const keys = await this.keyStorageService.getActiveKeys();
       const jwks: JWK[] = [];
+      const errors: string[] = [];
 
       for (const key of keys) {
         try {
-          // Double-check expiration (defense in depth)
-          if (this.isKeyExpired(key.expiresAt)) {
+          // Double-check expiration with grace period for clock skew
+          if (this.isKeyExpired(key.expiresAt, 300)) {
+            // 5 minute grace period
             this.logger.debug(`Skipping expired key in JWKS: ${key.kid}`);
             continue;
           }
 
           const jwk = this.convertPemToJwk(key.publicKey, key.kid, key.expiresAt);
 
-          // Validate JWK before including
-          if (this.validateJwk(jwk)) {
+          // RFC 7517 compliant validation
+          const validationResult = this.validateJwkRfc7517(jwk);
+          if (validationResult.valid) {
             jwks.push(jwk);
+
+            if (validationResult.warnings.length > 0) {
+              this.logger.warn(
+                `JWK warnings for ${key.kid}: ${validationResult.warnings.join(', ')}`,
+              );
+            }
           } else {
-            this.logger.warn(`Invalid JWK generated for key: ${key.kid}`);
+            errors.push(`Invalid JWK for key ${key.kid}: ${validationResult.errors.join(', ')}`);
           }
         } catch (error) {
-          this.logger.error(
-            `Failed to convert key ${key.kid} to JWK format`,
-            this.getErrorStack(error),
-          );
-          // Continue with other keys if one fails
+          const errorMsg = `Failed to convert key ${key.kid} to JWK: ${this.getErrorMessage(error)}`;
+          errors.push(errorMsg);
+          this.logger.error(errorMsg, this.getErrorStack(error));
         }
+      }
+
+      if (errors.length > 0) {
+        this.logger.warn(
+          `JWKS generation completed with ${errors.length} error(s): ${errors.join('; ')}`,
+        );
       }
 
       if (jwks.length === 0) {
@@ -60,7 +113,7 @@ export class JwksService {
           'No valid keys available for JWKS - this may cause authentication failures',
         );
       } else {
-        this.logger.debug(`Generated JWKS with ${jwks.length} key(s)`);
+        this.logger.debug(`Generated RFC 7517 compliant JWKS with ${jwks.length} key(s)`);
       }
 
       return { keys: jwks };
@@ -71,56 +124,24 @@ export class JwksService {
   }
 
   /**
-   * Get the JWK for a specific key ID
-   */
-  public async getJwk(kid: string): Promise<JWK | null> {
-    try {
-      const key = await this.keyStorageService.getKey(kid);
-      if (!key) {
-        this.logger.debug(`Key not found: ${kid}`);
-        return null;
-      }
-
-      if (this.isKeyExpired(key.expiresAt)) {
-        this.logger.warn(`Requested key is expired: ${kid}`);
-        return null;
-      }
-
-      const jwk = this.convertPemToJwk(key.publicKey, key.kid, key.expiresAt);
-
-      if (!this.validateJwk(jwk)) {
-        this.logger.error(`Generated invalid JWK for key: ${kid}`);
-        return null;
-      }
-
-      return jwk;
-    } catch (error) {
-      this.logger.error(`Error getting JWK for key ${kid}`, this.getErrorStack(error));
-      return null;
-    }
-  }
-
-  /**
-   * Convert a PEM-encoded public key to JWK format with proper RSA parameter extraction
+   * Convert PEM-encoded public key to RFC 7517 compliant JWK format
    */
   private convertPemToJwk(pem: string, kid: string, expiresAt?: Date): JWK {
     try {
-      // Validate input
-      if (!pem || !kid) {
-        throw new Error('PEM and kid are required parameters');
+      if (!pem?.trim() || !kid?.trim()) {
+        throw new Error('PEM content and kid are required parameters');
       }
 
-      // Create a crypto KeyObject from the PEM
+      // Create KeyObject and validate
       const publicKey = createPublicKey(pem);
 
-      // Verify it's an RSA key
       if (publicKey.asymmetricKeyType !== 'rsa') {
         throw new Error(
-          `Unsupported key type: ${publicKey.asymmetricKeyType}. Only RSA keys are supported.`,
+          `Unsupported key type: ${publicKey.asymmetricKeyType}. Only RSA keys supported in current implementation.`,
         );
       }
 
-      // Export as JWK to get proper n and e values
+      // Export as JWK to extract RSA parameters
       const keyData = publicKey.export({ format: 'jwk' }) as {
         kty?: string;
         n?: string;
@@ -128,27 +149,49 @@ export class JwksService {
       };
 
       if (!keyData.n || !keyData.e) {
-        throw new Error('Failed to extract RSA modulus (n) or exponent (e) from public key');
+        throw new Error('Failed to extract RSA parameters (n, e) from public key');
       }
 
-      // Create base JWK
+      // Validate Base64url encoding of parameters
+      if (!this.isValidBase64Url(keyData.n)) {
+        throw new Error('RSA modulus (n) is not valid Base64url encoded');
+      }
+
+      if (!this.isValidBase64Url(keyData.e)) {
+        throw new Error('RSA exponent (e) is not valid Base64url encoded');
+      }
+
+      // Build RFC 7517 compliant JWK
       const jwk: JWK = {
+        // Required parameters per RFC 7517
         kty: this.KEY_TYPE,
-        use: 'sig',
-        kid,
-        alg: this.DEFAULT_ALGORITHM,
+
+        // RSA-specific parameters (RFC 7518 Section 6.3)
         n: keyData.n, // Base64url-encoded modulus
         e: keyData.e, // Base64url-encoded exponent
-        key_ops: [...this.KEY_OPERATIONS] as KeyOperation[], // Copy array to avoid mutations
+
+        // Optional parameters for signature keys
+        use: 'sig',
+        key_ops: [...this.DEFAULT_KEY_OPERATIONS], // Copy to prevent mutation
+        alg: this.DEFAULT_ALGORITHM,
+        kid,
       };
 
-      // Add expiration if available and not already expired
+      // Add expiration with proper validation
       if (expiresAt && !this.isKeyExpired(expiresAt)) {
-        jwk.exp = Math.floor(expiresAt.getTime() / 1000);
+        // RFC 7519 numeric date format (seconds since epoch)
+        const expTimestamp = Math.floor(expiresAt.getTime() / 1000);
+
+        // Validate timestamp is reasonable (not in past, not too far future)
+        const now = Math.floor(Date.now() / 1000);
+        if (expTimestamp > now && expTimestamp < now + 365 * 24 * 60 * 60) {
+          // Within 1 year
+          jwk.exp = expTimestamp;
+        }
       }
 
       // Handle X.509 certificate data if present
-      const certData = this.generateCertificateData(pem);
+      const certData = this.extractCertificateData(pem);
       if (certData) {
         jwk.x5c = [certData.certificate];
         jwk.x5t = certData.thumbprint;
@@ -157,89 +200,211 @@ export class JwksService {
 
       return jwk;
     } catch (error) {
-      this.logger.error(`Error converting PEM to JWK for kid: ${kid}`, this.getErrorStack(error));
       throw new Error(
-        `Failed to convert public key to JWK format: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `PEM to JWK conversion failed for kid ${kid}: ${this.getErrorMessage(error)}`,
       );
     }
   }
 
   /**
-   * Generate certificate data for X.509 fields from a PEM certificate
-   * Enhanced version with better validation and error handling
+   * RFC 7517 compliant JWK validation with comprehensive checks
    */
-  private generateCertificateData(pemData: string): CertificateData | null {
+  private validateJwkRfc7517(jwk: JWK): { valid: boolean; errors: string[]; warnings: string[] } {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
     try {
-      // More robust certificate detection
-      const isCertificate =
-        pemData.includes('-----BEGIN CERTIFICATE-----') &&
-        pemData.includes('-----END CERTIFICATE-----');
-
-      if (!isCertificate) {
-        // This is expected for raw public keys
-        this.logger.debug('PEM data is not a certificate, skipping X.509 fields');
-        return null;
+      // Required parameter validation
+      if (!jwk.kty) {
+        errors.push('Missing required parameter: kty');
+      } else if (!this.SUPPORTED_KEY_TYPES.includes(jwk.kty as any)) {
+        errors.push(`Unsupported key type: ${jwk.kty}`);
       }
 
-      // Extract the base64 certificate data (remove headers, footers, and whitespace)
-      const certBase64 = pemData
-        .replace(/-----BEGIN CERTIFICATE-----/g, '')
-        .replace(/-----END CERTIFICATE-----/g, '')
-        .replace(/\s+/g, '');
+      // RSA-specific validation
+      if (jwk.kty === 'RSA') {
+        if (!jwk.n) {
+          errors.push('RSA key missing required parameter: n (modulus)');
+        } else if (!this.isValidBase64Url(jwk.n)) {
+          errors.push('RSA modulus (n) is not valid Base64url');
+        }
 
-      // Validate base64 format
-      if (!this.isValidBase64(certBase64)) {
-        this.logger.warn('Invalid base64 certificate data detected');
-        return null;
+        if (!jwk.e) {
+          errors.push('RSA key missing required parameter: e (exponent)');
+        } else if (!this.isValidBase64Url(jwk.e)) {
+          errors.push('RSA exponent (e) is not valid Base64url');
+        }
+
+        // Validate RSA modulus size (should be at least 2048 bits)
+        if (jwk.n && this.isValidBase64Url(jwk.n)) {
+          try {
+            const modulusBuffer = this.base64UrlDecode(jwk.n);
+            const modulusBits = modulusBuffer.length * 8;
+
+            if (modulusBits < 2048) {
+              warnings.push(`RSA modulus size ${modulusBits} bits is below recommended 2048 bits`);
+            }
+          } catch {
+            warnings.push('Could not validate RSA modulus size');
+          }
+        }
       }
 
-      // Convert to DER format (binary)
-      const certDer = Buffer.from(certBase64, 'base64');
-
-      // Validate minimum certificate size (typical X.509 certs are at least 200+ bytes)
-      if (certDer.length < 100) {
-        this.logger.warn(
-          `Certificate data appears too small (${certDer.length} bytes) to be valid`,
-        );
-        return null;
+      // Optional parameter validation
+      if (jwk.use && !this.SUPPORTED_KEY_USES.includes(jwk.use)) {
+        errors.push(`Unsupported key use: ${jwk.use}`);
       }
 
-      // Basic ASN.1 structure validation - check for DER sequence header
-      if (certDer[0] !== 0x30) {
-        this.logger.warn('Certificate data does not appear to be valid ASN.1 DER format');
-        return null;
+      if (jwk.alg && !this.SUPPORTED_ALGORITHMS.includes(jwk.alg as any)) {
+        warnings.push(`Algorithm ${jwk.alg} not in supported list`);
       }
 
-      // Generate SHA-1 thumbprint (x5t) - Base64url encoded
-      const sha1Thumbprint = createHash('sha1').update(certDer).digest('base64url');
+      if (jwk.key_ops) {
+        if (!Array.isArray(jwk.key_ops)) {
+          errors.push('key_ops must be an array');
+        } else {
+          const invalidOps = jwk.key_ops.filter(
+            (op) => !this.SUPPORTED_KEY_OPERATIONS.includes(op),
+          );
+          if (invalidOps.length > 0) {
+            errors.push(`Unsupported key operations: ${invalidOps.join(', ')}`);
+          }
+        }
+      }
 
-      // Generate SHA-256 thumbprint (x5t#S256) - Base64url encoded
-      const sha256Thumbprint = createHash('sha256').update(certDer).digest('base64url');
+      // Kid validation (should be present and non-empty)
+      if (!jwk.kid?.trim()) {
+        warnings.push('Missing kid (key ID) parameter - recommended for key identification');
+      }
+
+      // Expiration validation
+      if (jwk.exp !== undefined) {
+        if (typeof jwk.exp !== 'number' || !Number.isInteger(jwk.exp) || jwk.exp <= 0) {
+          errors.push('exp parameter must be a positive integer (NumericDate)');
+        } else {
+          const now = Math.floor(Date.now() / 1000);
+          if (jwk.exp <= now) {
+            errors.push(`Key is expired (exp: ${jwk.exp}, now: ${now})`);
+          }
+        }
+      }
+
+      // Not before validation
+      if (jwk.nbf !== undefined) {
+        if (typeof jwk.nbf !== 'number' || !Number.isInteger(jwk.nbf) || jwk.nbf < 0) {
+          errors.push('nbf parameter must be a non-negative integer (NumericDate)');
+        } else {
+          const now = Math.floor(Date.now() / 1000);
+          if (jwk.nbf > now) {
+            warnings.push(`Key is not yet valid (nbf: ${jwk.nbf}, now: ${now})`);
+          }
+        }
+      }
+
+      // X.509 certificate chain validation
+      if (jwk.x5c) {
+        if (!Array.isArray(jwk.x5c)) {
+          errors.push('x5c must be an array of certificate strings');
+        } else {
+          jwk.x5c.forEach((cert, index) => {
+            if (!this.isValidBase64(cert)) {
+              errors.push(`Invalid base64 certificate at index ${index} in x5c`);
+            }
+          });
+        }
+      }
+
+      // X.509 thumbprint validation
+      if (jwk.x5t && !this.isValidBase64Url(jwk.x5t)) {
+        errors.push('x5t thumbprint is not valid Base64url');
+      }
+
+      if (jwk['x5t#S256'] && !this.isValidBase64Url(jwk['x5t#S256'])) {
+        errors.push('x5t#S256 thumbprint is not valid Base64url');
+      }
+
+      // Consistency checks
+      if (jwk.use && jwk.key_ops) {
+        const useConsistent = this.validateUseKeyOpsConsistency(jwk.use, jwk.key_ops);
+        if (!useConsistent) {
+          warnings.push('use and key_ops parameters may be inconsistent');
+        }
+      }
 
       return {
-        certificate: certBase64, // Standard base64 (not base64url) for x5c
-        thumbprint: sha1Thumbprint,
-        thumbprintSha256: sha256Thumbprint,
+        valid: errors.length === 0,
+        errors,
+        warnings,
       };
     } catch (error) {
-      this.logger.warn('Failed to generate certificate data', this.getErrorStack(error));
-      return null;
+      errors.push(`Validation error: ${this.getErrorMessage(error)}`);
+      return { valid: false, errors, warnings };
     }
   }
 
   /**
-   * Validate standard Base64 encoding (with padding)
+   * Validate consistency between 'use' and 'key_ops' parameters
+   * RFC 7517 Section 4.2 and 4.3
+   */
+  private validateUseKeyOpsConsistency(use: string, keyOps: KeyOperation[]): boolean {
+    if (use === 'sig') {
+      return keyOps.every((op) => ['sign', 'verify'].includes(op));
+    } else if (use === 'enc') {
+      return keyOps.every((op) =>
+        ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey', 'deriveKey', 'deriveBits'].includes(op),
+      );
+    }
+    return true; // Unknown use value, can't validate consistency
+  }
+
+  /**
+   * Enhanced Base64url validation per RFC 4648 Section 5
+   */
+  private isValidBase64Url(str: string): boolean {
+    if (!str || typeof str !== 'string') return false;
+
+    // Base64url uses A-Z, a-z, 0-9, -, _ (no padding)
+    const base64UrlPattern = /^[A-Za-z0-9_-]+$/;
+
+    if (!base64UrlPattern.test(str)) return false;
+
+    // Additional length validation - must be valid for base64 decoding
+    try {
+      this.base64UrlDecode(str);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * RFC 4648 compliant Base64url decoding
+   */
+  private base64UrlDecode(str: string): Buffer {
+    // Convert Base64url to standard Base64
+    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+
+    // Add padding if necessary
+    const padding = 4 - (base64.length % 4);
+    if (padding !== 4) {
+      base64 += '='.repeat(padding);
+    }
+
+    return Buffer.from(base64, 'base64');
+  }
+
+  /**
+   * Enhanced Base64 validation for standard encoding
    */
   private isValidBase64(str: string): boolean {
+    if (!str || typeof str !== 'string') return false;
+
+    // Standard base64 pattern with optional padding
+    const base64Pattern = /^[A-Za-z0-9+/]*={0,2}$/;
+
+    if (!base64Pattern.test(str)) return false;
+
     try {
-      if (!str || str.length === 0) return false;
-
-      // Base64 uses A-Z, a-z, 0-9, +, / and = for padding
-      const base64Regex = /^[A-Za-z0-9+/]+={0,2}$/;
-
-      if (!base64Regex.test(str)) return false;
-
-      // Additional validation: try to decode it
       Buffer.from(str, 'base64');
       return true;
     } catch {
@@ -248,193 +413,126 @@ export class JwksService {
   }
 
   /**
-   * Get the current active JWK
+   * Enhanced certificate data extraction with proper validation
    */
-  public async getCurrentJwk(): Promise<JWK | null> {
+  private extractCertificateData(pemData: string): CertificateData | null {
     try {
-      const key = await this.keyStorageService.getCurrentKey();
-      if (!key) {
-        this.logger.debug('No current active key found');
+      const certMatch = pemData.match(
+        /-----BEGIN CERTIFICATE-----\s*([\s\S]*?)\s*-----END CERTIFICATE-----/,
+      );
+
+      if (!certMatch || !certMatch[1]) {
+        this.logger.debug('PEM data is not a certificate, skipping X.509 fields');
         return null;
       }
 
-      if (this.isKeyExpired(key.expiresAt)) {
-        this.logger.warn(`Current key is expired: ${key.kid}`);
+      // Extract and validate base64 certificate data
+      const certBase64 = certMatch[1].replace(/\s+/g, '');
+
+      if (!this.isValidBase64(certBase64)) {
+        this.logger.warn('Invalid base64 certificate data detected');
         return null;
       }
 
-      const jwk = this.convertPemToJwk(key.publicKey, key.kid, key.expiresAt);
+      // Convert to DER format
+      const certDer = Buffer.from(certBase64, 'base64');
 
-      if (!this.validateJwk(jwk)) {
-        this.logger.error('Current key generated invalid JWK');
+      // Basic ASN.1 DER validation
+      if (certDer.length < 100 || certDer[0] !== 0x30) {
+        this.logger.warn('Certificate data appears invalid or corrupted');
         return null;
       }
 
-      return jwk;
+      // Generate RFC 7517 compliant thumbprints
+      const sha1Hash = createHash('sha1').update(certDer).digest();
+      const sha256Hash = createHash('sha256').update(certDer).digest();
+
+      return {
+        certificate: certBase64,
+        thumbprint: this.base64UrlEncode(sha1Hash),
+        thumbprintSha256: this.base64UrlEncode(sha256Hash),
+      };
     } catch (error) {
-      this.logger.error('Error getting current JWK', this.getErrorStack(error));
+      this.logger.warn('Failed to extract certificate data', this.getErrorStack(error));
       return null;
     }
   }
 
   /**
-   * Check if a key is expired
+   * RFC 4648 compliant Base64url encoding
    */
-  private isKeyExpired(expiresAt?: Date): boolean {
+  private base64UrlEncode(buffer: Buffer): string {
+    return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
+  /**
+   * Enhanced key expiration check with configurable grace period
+   */
+  private isKeyExpired(expiresAt?: Date, gracePeriodSeconds: number = 0): boolean {
     if (!expiresAt) return false;
-    return new Date() > expiresAt;
+
+    const now = new Date();
+    const expiryWithGrace = new Date(expiresAt.getTime() + gracePeriodSeconds * 1000);
+
+    return now > expiryWithGrace;
   }
 
   /**
-   * Validate JWK structure according to RFC 7517
+   * Get JWKS with metadata for monitoring and caching
    */
-  public validateJwk(jwk: JWK): boolean {
-    try {
-      // Check required fields for RSA keys used for signing
-      const requiredFields = ['kty', 'use', 'kid', 'alg', 'n', 'e'] as const;
+  public async getJwksWithMetadata(): Promise<{ jwks: JWKS; metadata: JwksMetadata }> {
+    const jwks = await this.getJwks();
+    const keys = await this.keyStorageService.getActiveKeys();
 
-      for (const field of requiredFields) {
-        if (!(field in jwk) || !jwk[field]) {
-          this.logger.error(`JWK validation failed: Missing or empty required field: ${field}`);
-          return false;
+    const nextExpiry = keys.reduce(
+      (earliest, key) => {
+        if (!earliest || key.expiresAt < earliest) {
+          return key.expiresAt;
         }
-      }
+        return earliest;
+      },
+      null as Date | null,
+    );
 
-      // Validate specific values
-      if (jwk.kty !== 'RSA') {
-        this.logger.error(`JWK validation failed: Invalid key type: ${jwk.kty}, expected RSA`);
-        return false;
-      }
+    const metadata: JwksMetadata = {
+      lastUpdated: new Date(),
+      keyCount: jwks.keys.length,
+      nextKeyExpiry: nextExpiry || undefined,
+    };
 
-      if (jwk.use !== 'sig') {
-        this.logger.error(`JWK validation failed: Invalid use: ${jwk.use}, expected sig`);
-        return false;
-      }
-
-      if (jwk.alg !== 'RS256') {
-        this.logger.error(`JWK validation failed: Invalid algorithm: ${jwk.alg}, expected RS256`);
-        return false;
-      }
-
-      // Validate Base64url encoding of n and e
-      if (!this.isValidBase64Url(jwk.n as string)) {
-        this.logger.error('JWK validation failed: Invalid Base64url encoding for modulus (n)');
-        return false;
-      }
-
-      if (!this.isValidBase64Url(jwk.e as string)) {
-        this.logger.error('JWK validation failed: Invalid Base64url encoding for exponent (e)');
-        return false;
-      }
-
-      // Validate key_ops if present
-      if (jwk.key_ops && Array.isArray(jwk.key_ops)) {
-        const validOps = [
-          'verify',
-          'sign',
-          'encrypt',
-          'decrypt',
-          'wrapKey',
-          'unwrapKey',
-          'deriveKey',
-          'deriveBits',
-        ];
-        for (const op of jwk.key_ops) {
-          if (!validOps.includes(op)) {
-            this.logger.error(`JWK validation failed: Invalid key operation: ${op}`);
-            return false;
-          }
-        }
-      }
-
-      // Validate expiration if present
-      if (jwk.exp !== undefined) {
-        if (typeof jwk.exp !== 'number' || jwk.exp <= 0) {
-          this.logger.error(`JWK validation failed: Invalid expiration time: ${jwk.exp}`);
-          return false;
-        }
-
-        // Check if expired
-        const now = Math.floor(Date.now() / 1000);
-        if (jwk.exp < now) {
-          this.logger.error(`JWK validation failed: Key is expired (exp: ${jwk.exp}, now: ${now})`);
-          return false;
-        }
-      }
-
-      // Validate certificate fields if present
-      if (jwk.x5c && Array.isArray(jwk.x5c)) {
-        for (const cert of jwk.x5c) {
-          if (!this.isValidBase64(cert)) {
-            this.logger.error('JWK validation failed: Invalid certificate in x5c');
-            return false;
-          }
-        }
-      }
-
-      if (jwk.x5t && !this.isValidBase64Url(jwk.x5t)) {
-        this.logger.error('JWK validation failed: Invalid x5t thumbprint');
-        return false;
-      }
-
-      if (jwk['x5t#S256'] && !this.isValidBase64Url(jwk['x5t#S256'])) {
-        this.logger.error('JWK validation failed: Invalid x5t#S256 thumbprint');
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      this.logger.error('Error validating JWK', this.getErrorStack(error));
-      return false;
-    }
+    return { jwks, metadata };
   }
 
   /**
-   * Validate Base64url encoding (RFC 4648 Section 5)
-   */
-  private isValidBase64Url(str: string): boolean {
-    try {
-      if (!str || str.length === 0) return false;
-
-      // Base64url uses A-Z, a-z, 0-9, -, _ and no padding
-      const base64UrlRegex = /^[A-Za-z0-9_-]+$/;
-
-      if (!base64UrlRegex.test(str)) return false;
-
-      // Additional validation: convert to standard base64 and try to decode
-      const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-      const padded = base64 + '==='.slice(0, (4 - (base64.length % 4)) % 4);
-
-      Buffer.from(padded, 'base64');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Get JWKS statistics for monitoring
+   * Get JWKS statistics for enhanced monitoring
    */
   public async getJwksStats(): Promise<{
     totalKeys: number;
     validKeys: number;
     expiredKeys: number;
     certificateKeys: number;
+    algorithmDistribution: Record<string, number>;
   }> {
     try {
-      const jwks = await this.getJwks();
-      const totalKeys = jwks.keys.length;
-      const validKeys = jwks.keys.filter((jwk) => this.validateJwk(jwk)).length;
-      const expiredKeys = jwks.keys.filter(
-        (jwk) => jwk.exp && jwk.exp < Math.floor(Date.now() / 1000),
-      ).length;
-      const certificateKeys = jwks.keys.filter((jwk) => jwk.x5c && jwk.x5c.length > 0).length;
+      const { jwks } = await this.getJwksWithMetadata();
+      const validKeys = jwks.keys.filter((jwk) => this.validateJwkRfc7517(jwk).valid);
+
+      const algorithmDistribution: Record<string, number> = {};
+      jwks.keys.forEach((jwk) => {
+        const alg = jwk.alg || 'unknown';
+        algorithmDistribution[alg] = (algorithmDistribution[alg] || 0) + 1;
+      });
+
+      const now = Math.floor(Date.now() / 1000);
+      const expiredKeys = jwks.keys.filter((jwk) => jwk.exp && jwk.exp < now);
+      const certificateKeys = jwks.keys.filter((jwk) => jwk.x5c && jwk.x5c.length > 0);
 
       return {
-        totalKeys,
-        validKeys,
-        expiredKeys,
-        certificateKeys,
+        totalKeys: jwks.keys.length,
+        validKeys: validKeys.length,
+        expiredKeys: expiredKeys.length,
+        certificateKeys: certificateKeys.length,
+        algorithmDistribution,
       };
     } catch (error) {
       this.logger.error('Error getting JWKS statistics', this.getErrorStack(error));
@@ -443,8 +541,19 @@ export class JwksService {
         validKeys: 0,
         expiredKeys: 0,
         certificateKeys: 0,
+        algorithmDistribution: {},
       };
     }
+  }
+
+  /**
+   * Helper method to safely extract error message
+   */
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
   }
 
   /**
