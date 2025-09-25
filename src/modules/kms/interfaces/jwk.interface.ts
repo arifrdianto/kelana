@@ -2,6 +2,8 @@
  * RFC 7517 compliant JWK interfaces
  */
 
+import { SignOptions, VerifyOptions } from 'jsonwebtoken';
+
 export interface JWK {
   // Required parameters
   kty: 'RSA' | 'EC' | 'oct';
@@ -50,18 +52,19 @@ export type KeyOperation =
   | 'deriveKey'
   | 'deriveBits';
 
-export interface JWKValidationResult {
-  valid: boolean;
-  errors: string[];
-  warnings: string[];
+export interface JwtSignOptions extends Omit<SignOptions, 'algorithm' | 'keyid'> {
+  expiresIn?: SignOptions['expiresIn'];
+  notBefore?: SignOptions['notBefore'];
+  audience?: SignOptions['audience'];
+  issuer?: SignOptions['issuer'];
+  subject?: SignOptions['subject'];
+  noTimestamp?: SignOptions['noTimestamp'];
+  header?: SignOptions['header'];
+  kid?: string; // Allow override of key ID
 }
 
-export interface KeyPairExtended {
-  privateKey: string;
-  publicKey: string;
-  kid: string;
-  algorithm: 'RS256';
-  createdAt: Date;
-  expiresAt: Date;
-  keyUsage: 'signing' | 'encryption';
+export interface JwtVerifyOptions extends Omit<VerifyOptions, 'complete'> {
+  ignoreExpiration?: boolean;
+  ignoreNotBefore?: boolean;
+  clockTolerance?: number;
 }

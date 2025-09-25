@@ -17,15 +17,3 @@ export class InvalidJWKException extends KMSException {
     super(`Invalid JWK: ${errors.join(', ')}`, HttpStatus.BAD_REQUEST);
   }
 }
-
-export class KMSInitializationException extends KMSException {
-  constructor(message: string) {
-    super(`KMS Initialization failed: ${message}`, HttpStatus.SERVICE_UNAVAILABLE);
-  }
-}
-
-export class KeyGenerationException extends KMSException {
-  constructor(message: string) {
-    super(`Key generation failed: ${message}`, HttpStatus.INTERNAL_SERVER_ERROR);
-  }
-}

@@ -251,10 +251,10 @@ export class KeyRotationService implements OnModuleInit {
   /**
    * Stop the key rotation scheduler (useful for graceful shutdown)
    */
-  public stopRotationScheduler(): void {
+  public async stopRotationScheduler(): Promise<void> {
     try {
       const job = this.schedulerRegistry.getCronJob('keyRotation');
-      job.stop();
+      await job.stop();
       this.logger.log('Key rotation scheduler stopped');
     } catch (error) {
       this.logger.warn('Failed to stop key rotation scheduler', this.getErrorStack(error));

@@ -283,49 +283,4 @@ export class KeyStorageService implements OnModuleInit {
       throw error;
     }
   }
-
-  /**
-   * Get key health information
-   * @returns Key health status including counts and expiry info
-   */
-  public async getKeyHealth(): Promise<{
-    activeKeys: number;
-    expiredKeys: number;
-    nextExpiry?: Date;
-    oldestKey?: Date;
-  }> {
-    try {
-      const now = new Date();
-
-      const [activeKeys, expiredKeys] = await Promise.all([
-        this.keyRepository.countBy({ isActive: true, expiresAt: MoreThan(now) }),
-        this.keyRepository.countBy({ isActive: true, expiresAt: MoreThan(now) }),
-      ]);
-
-      const nextExpiringKey = await this.keyRepository
-        .createQueryBuilder('key')
-        .where('key.isActive = :isActive AND key.expiresAt > :now', {
-          isActive: true,
-          now,
-        })
-        .orderBy('key.expiresAt', 'ASC')
-        .getOne();
-
-      const oldestKey = await this.keyRepository
-        .createQueryBuilder('key')
-        .where('key.isActive = :isActive', { isActive: true })
-        .orderBy('key.createdAt', 'ASC')
-        .getOne();
-
-      return {
-        activeKeys,
-        expiredKeys,
-        nextExpiry: nextExpiringKey?.expiresAt,
-        oldestKey: oldestKey?.createdAt,
-      };
-    } catch (error) {
-      this.logger.error('Failed to get key health information', this.getErrorStack(error));
-      return { activeKeys: 0, expiredKeys: 0 };
-    }
-  }
 }

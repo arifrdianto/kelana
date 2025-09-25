@@ -4,24 +4,9 @@ import { decode, JwtPayload, sign, SignOptions, verify, VerifyOptions } from 'js
 
 import { KeyNotFoundException } from '@/shared/exceptions/jwk.exception';
 
+import { JwtSignOptions, JwtVerifyOptions } from '../interfaces/jwk.interface';
+
 import { KeyStorageService } from './key-storage.service';
-
-export interface JwtSignOptions extends Omit<SignOptions, 'algorithm' | 'keyid'> {
-  expiresIn?: SignOptions['expiresIn'];
-  notBefore?: SignOptions['notBefore'];
-  audience?: SignOptions['audience'];
-  issuer?: SignOptions['issuer'];
-  subject?: SignOptions['subject'];
-  noTimestamp?: SignOptions['noTimestamp'];
-  header?: SignOptions['header'];
-  kid?: string; // Allow override of key ID
-}
-
-export interface JwtVerifyOptions extends Omit<VerifyOptions, 'complete'> {
-  ignoreExpiration?: boolean;
-  ignoreNotBefore?: boolean;
-  clockTolerance?: number;
-}
 
 @Injectable()
 export class CryptographicService {
@@ -309,42 +294,6 @@ export class CryptographicService {
     } catch (error) {
       this.logger.error('Error verifying JWT and extracting claims', error.stack);
       throw error;
-    }
-  }
-
-  /**
-   * Health check for cryptographic service
-   */
-  public async healthCheck(): Promise<{
-    status: 'healthy' | 'unhealthy';
-    details: {
-      hasActiveKey: boolean;
-      supportedAlgorithms: string[];
-      currentKeyId?: string;
-      currentKeyExpiration?: Date;
-    };
-  }> {
-    try {
-      const currentKey = await this.keyStorageService.getCurrentKey();
-
-      return {
-        status: currentKey ? 'healthy' : 'unhealthy',
-        details: {
-          hasActiveKey: !!currentKey,
-          supportedAlgorithms: this.SUPPORTED_ALGORITHMS,
-          currentKeyId: currentKey?.kid,
-          currentKeyExpiration: currentKey?.expiresAt,
-        },
-      };
-    } catch (error) {
-      this.logger.error('Cryptographic service health check failed', error.stack);
-      return {
-        status: 'unhealthy',
-        details: {
-          hasActiveKey: false,
-          supportedAlgorithms: this.SUPPORTED_ALGORITHMS,
-        },
-      };
     }
   }
 }
