@@ -22,9 +22,9 @@ export class CryptographicService {
    */
   public async sign<T extends object>(payload: T, options: JwtSignOptions = {}): Promise<string> {
     try {
-      // Get signing key
+      // CHANGE: Use getValidatedKey instead of getKey
       const key = options.kid
-        ? await this.keyStorageService.getKey(options.kid)
+        ? await this.keyStorageService.getValidatedKey(options.kid) // <- NEW METHOD
         : await this.keyStorageService.getCurrentKey();
 
       if (!key) {
@@ -32,19 +32,16 @@ export class CryptographicService {
         throw new KeyNotFoundException(keyId);
       }
 
+      // Rest of the method remains the same...
       if (!key.privateKey) {
         throw new Error('Private key is not available for signing');
       }
 
-      // Validate key is not expired
-      if (key.expiresAt && new Date() > key.expiresAt) {
-        throw new Error(`Signing key ${key.kid} has expired`);
-      }
+      // Remove the manual expiration check since getValidatedKey handles it
+      // REMOVED: if (key.expiresAt && new Date() > key.expiresAt) { ... }
 
-      // Validate algorithm compatibility
       const algorithm = this.validateAndGetAlgorithm(options.header?.alg);
 
-      // Create sign options with proper typing
       const signOptions: SignOptions = {
         algorithm: algorithm as 'RS256',
         keyid: key.kid,
@@ -52,12 +49,10 @@ export class CryptographicService {
         ...options,
       };
 
-      // Remove our custom options that aren't part of SignOptions
       delete (signOptions as any).kid;
 
       this.logger.debug(`Signing JWT with key: ${key.kid}, algorithm: ${algorithm}`);
 
-      // Use Promise wrapper for sign function
       const token = await new Promise<string>((resolve, reject) => {
         sign(payload, key.privateKey, signOptions, (error, token) => {
           if (error || !token) {
@@ -92,7 +87,6 @@ export class CryptographicService {
         throw new Error('Token is required');
       }
 
-      // Decode without verification to get the key ID
       const decoded = decode(token, { complete: true });
 
       if (!decoded || typeof decoded === 'string' || !decoded.header) {
@@ -104,13 +98,11 @@ export class CryptographicService {
         throw new Error('JWT does not contain a key ID (kid) in header');
       }
 
-      // Validate algorithm
       if (alg) {
         this.validateAndGetAlgorithm(alg);
       }
 
-      // Get the verification key
-      const key = await this.keyStorageService.getKey(kid);
+      const key = await this.keyStorageService.getValidatedKey(kid);
       if (!key) {
         throw new KeyNotFoundException(kid);
       }
@@ -119,15 +111,12 @@ export class CryptographicService {
         throw new Error(`Public key not available for key ID: ${kid}`);
       }
 
-      // Check if key is expired (allow small grace period for clock skew)
-      const gracePeriod = 5 * 60 * 1000; // 5 minutes
-      if (key.expiresAt && new Date().getTime() > key.expiresAt.getTime() + gracePeriod) {
-        throw new Error(`Verification key ${kid} has expired`);
-      }
+      // Remove manual expiration check since getValidatedKey handles it
+      // REMOVED: grace period check
 
       const verifyOptions: VerifyOptions = {
         algorithms: options.algorithms || [this.DEFAULT_ALGORITHM],
-        clockTolerance: options.clockTolerance || 60, // 60 seconds default
+        clockTolerance: options.clockTolerance || 60,
         ...options,
       };
 
@@ -135,7 +124,6 @@ export class CryptographicService {
         `Verifying JWT with key: ${kid}, algorithm: ${alg || this.DEFAULT_ALGORITHM}`,
       );
 
-      // Use Promise wrapper for verify function
       const verified = await new Promise<T & JwtPayload>((resolve, reject) => {
         verify(token, key.publicKey, verifyOptions, (error, decoded) => {
           if (error) {

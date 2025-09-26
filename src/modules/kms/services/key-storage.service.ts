@@ -212,7 +212,17 @@ export class KeyStorageService implements OnModuleInit {
         .orderBy('key.created_at', 'DESC')
         .getOne();
 
-      if (!entity) return undefined;
+      if (!entity) {
+        this.logger.debug('No current active key found');
+        return undefined;
+      }
+
+      // Double-check expiration to handle clock skew
+      if (entity.expiresAt && new Date() > entity.expiresAt) {
+        this.logger.warn(`Current key ${entity.kid} is expired, deactivating`);
+        await this.deactivateKey(entity.kid, 'expired');
+        return undefined;
+      }
 
       return {
         kid: entity.kid,
@@ -224,6 +234,59 @@ export class KeyStorageService implements OnModuleInit {
       };
     } catch (error) {
       this.logger.error('Error retrieving current key:', this.getErrorStack(error));
+      return undefined;
+    }
+  }
+
+  public async getValidatedKey(kid: string): Promise<KeyPair | undefined> {
+    try {
+      const entity = await this.keyRepository.findOne({
+        where: { kid, isActive: true },
+      });
+
+      if (!entity) {
+        this.logger.debug(`Key not found or inactive: ${kid}`);
+        return undefined;
+      }
+
+      // Check if key is expired
+      if (entity.expiresAt && new Date() > entity.expiresAt) {
+        this.logger.warn(`Key ${kid} is expired but still marked active`);
+
+        // Automatically deactivate expired keys
+        try {
+          await this.deactivateKey(kid, 'expired');
+        } catch (deactivationError) {
+          this.logger.error(
+            `Failed to deactivate expired key ${kid}:`,
+            this.getErrorStack(deactivationError),
+          );
+          // Continue execution - the key is still expired
+        }
+        return undefined;
+      }
+
+      let decryptedPrivateKey: string;
+      try {
+        decryptedPrivateKey = this.decrypt(entity.privateKey);
+      } catch (decryptError) {
+        this.logger.error(
+          `Failed to decrypt private key for ${kid}:`,
+          this.getErrorStack(decryptError),
+        );
+        return undefined;
+      }
+
+      return {
+        kid: entity.kid,
+        algorithm: entity.algorithm as 'RS256',
+        publicKey: entity.publicKey,
+        privateKey: decryptedPrivateKey,
+        createdAt: entity.createdAt,
+        expiresAt: entity.expiresAt,
+      };
+    } catch (error) {
+      this.logger.error(`Error retrieving validated key ${kid}:`, this.getErrorStack(error));
       return undefined;
     }
   }

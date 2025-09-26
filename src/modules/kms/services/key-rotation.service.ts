@@ -3,6 +3,8 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 
 import { CronJob } from 'cron';
 
+import { KeyRotationException } from '@/shared/exceptions/jwk.exception';
+
 import { KeyGenerationService, KeyPair } from './key-generation.service';
 import { KeyStorageService } from './key-storage.service';
 
@@ -96,7 +98,6 @@ export class KeyRotationService implements OnModuleInit {
         }
       }
 
-      // If no keys need rotation yet, check if we have at least one active key
       if (!rotationNeeded && currentKeys.length === 0) {
         rotationNeeded = true;
         rotationReason = 'No active keys found';
@@ -110,8 +111,13 @@ export class KeyRotationService implements OnModuleInit {
         this.logger.debug('No key rotation needed at this time.');
       }
     } catch (error) {
-      this.logger.error('Error during key rotation check', this.getErrorStack(error));
-      throw error;
+      // CHANGE: Use specific exception type
+      const rotationError = new KeyRotationException(
+        'Key rotation check failed',
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      this.logger.error('Error during key rotation check', this.getErrorStack(rotationError));
+      throw rotationError;
     }
   }
 
@@ -122,24 +128,19 @@ export class KeyRotationService implements OnModuleInit {
     try {
       this.logger.log('Starting key rotation process...');
 
-      // Generate a new key pair
       const newKeyPair = await this.keyGenerationService.generateKeyPair();
       this.logger.log(`Generated new key pair with kid: ${newKeyPair.kid}`);
 
-      // Get the current active key before storing the new one
       const currentKey = await this.keyStorageService.getCurrentKey();
 
-      // Store the new key (this becomes the new active key)
       await this.keyStorageService.storeKey(newKeyPair);
       this.logger.log(`Stored new key with kid: ${newKeyPair.kid}`);
 
-      // Deactivate old key if it exists
       if (currentKey) {
         await this.keyStorageService.deactivateKey(currentKey.kid, 'rotated');
         this.logger.log(`Deactivated old key with kid: ${currentKey.kid}`);
       }
 
-      // Log the rotation
       await this.keyStorageService.logKeyRotation({
         oldKid: currentKey?.kid,
         newKid: newKeyPair.kid,
@@ -148,16 +149,18 @@ export class KeyRotationService implements OnModuleInit {
         rotatedBy: 'system',
       });
 
-      // Clean up expired keys
       await this.cleanupExpiredKeys();
 
       this.logger.log(`Successfully completed key rotation. New active key ID: ${newKeyPair.kid}`);
       return newKeyPair;
     } catch (error) {
-      this.logger.error('Error during key rotation', this.getErrorStack(error));
-      throw new Error(
-        `Failed to rotate keys: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      // CHANGE: Use specific exception type
+      const rotationError = new KeyRotationException(
+        'Key rotation process failed',
+        error instanceof Error ? error : new Error(String(error)),
       );
+      this.logger.error('Error during key rotation', this.getErrorStack(rotationError));
+      throw rotationError;
     }
   }
 
